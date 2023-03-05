@@ -1,103 +1,77 @@
-import { useState, useEffect, useContext } from 'react'
-import { createClient, basicClient, searchPublications, explorePublications, timeline } from '../api'
-import { css } from '@emotion/css'
-import { ethers } from 'ethers'
-import { trimString, generateRandomColor } from '../utils'
-import { Button, SearchInput, Placeholders } from '../components'
-import { AppContext } from '../context'
-import Link from 'next/link'
-
-const typeMap = {
-  Comment: "Comment",
-  Mirror: "Mirror",
-  Post: "Post"
-}
+import { css } from "@emotion/css";
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import {
+  createClient,
+  getPublications,
+  recommendProfiles,
+  searchProfiles,
+} from "../api";
+import { Button, Placeholders, SearchInput } from "../components";
+import { generateRandomColor, trimString } from "../utils";
 
 export default function Home() {
-  const [posts, setPosts] = useState([])
-  const [loadingState, setLoadingState] = useState('loading')
-  const [searchString, setSearchString] = useState('')
-  const { profile } = useContext(AppContext)
+  const [profiles, setProfiles] = useState([]);
+  const [loadingState, setLoadingState] = useState("loading");
+  const [searchString, setSearchString] = useState("");
 
   useEffect(() => {
-    fetchPosts() 
-  }, [profile])
+    getRecommendedProfiles();
+  }, []);
 
-  async function fetchPosts() {
-    const provider = new ethers.providers.Web3Provider(
-      (window).ethereum
-    )
-    const addresses = await provider.listAccounts();
-    if (profile) {
-      try {
-        const client = await createClient()
-        const response = await client.query(timeline, {
-          profileId: profile.id, limit: 15
-        }).toPromise()
-        let posts = response.data.timeline.items.filter(post => {
-          if (post.profile) {
-            post.backgroundColor = generateRandomColor()
-            return post
-          }
+  async function getRecommendedProfiles() {
+    try {
+      const urqlClient = await createClient();
+      const response = await urqlClient.query(recommendProfiles).toPromise();
+      const profileData = await Promise.all(
+        response.data.recommendedProfiles.map(async (profile) => {
+          const pub = await urqlClient
+            .query(getPublications, { id: profile.id, limit: 1 })
+            .toPromise();
+          profile.publication = pub.data.publications.items[0];
+          profile.backgroundColor = generateRandomColor();
+          return profile;
         })
-        posts = posts.map(post => {
-          let picture = post.profile.picture
-          if (picture && picture.original && picture.original.url) {
-            if (picture.original.url.startsWith('ipfs://')) {
-              let result = picture.original.url.substring(7, picture.original.url.length)
-              post.profile.picture.original.url = `http://lens.infura-ipfs.io/ipfs/${result}`
-            }
-          }
-          return post
-        })
-        setPosts(posts)
-        setLoadingState('loaded')
-      } catch (error) {
-        console.log({ error })
-      }
-    } else if (!addresses.length) {
-      try {
-        const response = await basicClient.query(explorePublications).toPromise()
-        const posts = response.data.explorePublications.items.filter(post => {
-          if (post.profile) {
-            post.backgroundColor = generateRandomColor()
-            return post
-          }
-        })
-        setPosts(posts)
-        setLoadingState('loaded')
-      } catch (error) {
-        console.log({ error })
-      }
+      );
+      setProfiles(profileData);
+      setLoadingState("loaded");
+    } catch (err) {
+      console.log("error fetching recommended profiles: ", err);
     }
   }
 
-  async function searchForPost() {
-    setLoadingState('')
+  async function searchForProfile() {
+    if (!searchString) return;
     try {
-      const urqlClient = await createClient()
-      const response = await urqlClient.query(searchPublications, {
-        query: searchString, type: 'PUBLICATION'
-      }).toPromise()
-      const postData = response.data.search.items.filter(post => {
-        if (post.profile) {
-          post.backgroundColor = generateRandomColor()
-          return post
-        }
-      })
-  
-      setPosts(postData)
-      if (!postData.length) {
-        setLoadingState('no-results')
-      }
-    } catch (error) {
-      console.log({ error })
+      const urqlClient = await createClient();
+      const response = await urqlClient
+        .query(searchProfiles, {
+          query: searchString,
+          type: "PROFILE",
+        })
+        .toPromise();
+      const profileData = await Promise.all(
+        response.data.search.items.map(async (profile) => {
+          const pub = await urqlClient
+            .query(getPublications, { id: profile.profileId, limit: 1 })
+            .toPromise();
+          profile.id = profile.profileId;
+          profile.backgroundColor = generateRandomColor();
+          profile.publication = pub.data.publications.items[0];
+          return profile;
+        })
+      );
+
+      setProfiles(profileData);
+    } catch (err) {
+      console.log("error searching profiles...", err);
     }
   }
 
   function handleKeyDown(e) {
-    if (e.key === 'Enter') {
-      searchForPost()
+    if (e.key === "Enter") {
+      searchForProfile();
     }
   }
 
@@ -105,119 +79,118 @@ export default function Home() {
     <div>
       <div className={searchContainerStyle}>
         <SearchInput
-          placeholder='Search'
-          onChange={e => setSearchString(e.target.value)}
+          placeholder="Search"
+          onChange={(e) => setSearchString(e.target.value)}
           value={searchString}
           onKeyDown={handleKeyDown}
         />
-        <Button
-          buttonText="SEARCH POSTS"
-          onClick={searchForPost}
-        />
+        <Button onClick={searchForProfile} buttonText="SEARCH PROFILES" />
       </div>
       <div className={listItemContainerStyle}>
-        {
-          loadingState === 'no-results' && (
-            <h2>No results....</h2>
-          )
-        }
-        {
-           loadingState === 'loading' && <Placeholders number={6} />
-        }
-        {
-          posts.map((post, index) => (
-            <Link href={`/profile/${post.profile.id || post.profile.profileId}`} key={index}>
-              <a>
-                <div className={listItemStyle}>
-                  <p className={itemTypeStyle}>{typeMap[post.__typename]}</p>
-                  <div className={profileContainerStyle} >
-                    {
-                      post.profile.picture && post.profile.picture.original ? (
-                      <img src={post.profile.picture.original.url} className={profileImageStyle} />
-                      ) : (
-                        <div
-                          className={
-                            css`
-                            ${placeholderStyle};
-                            background-color: ${post.backgroundColor};
-                            `
-                          }
-                        />
-                      )
-                    }
-                    
-                    <div className={profileInfoStyle}>
-                      <h3 className={nameStyle}>{post.profile.name}</h3>
-                      <p className={handleStyle}>{post.profile.handle}</p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className={latestPostStyle}>{trimString(post.metadata.content, 200)}</p>
+        {loadingState === "loading" && <Placeholders number={6} />}
+        {profiles.map((profile, index) => (
+          <Link href={`/profile/${profile.id}`} key={index}>
+            <a>
+              <div className={listItemStyle}>
+                <div className={profileContainerStyle}>
+                  {profile.picture && profile.picture.original ? (
+                    <Image
+                      src={profile.picture.original.url}
+                      className={profileImageStyle}
+                      width="42px"
+                      height="42px"
+                    />
+                  ) : (
+                    <div
+                      className={css`
+                        ${placeholderStyle};
+                        background-color: ${profile.backgroundColor};
+                      `}
+                    />
+                  )}
+
+                  <div className={profileInfoStyle}>
+                    <h3 className={nameStyle}>{profile.name}</h3>
+                    <p className={handleStyle}>{profile.handle}</p>
                   </div>
                 </div>
-              </a>
-            </Link>
-          ))
-        }
+                <div>
+                  <p className={latestPostStyle}>
+                    {trimString(profile.publication?.metadata.content, 200)}
+                  </p>
+                </div>
+              </div>
+            </a>
+          </Link>
+        ))}
       </div>
     </div>
-  )
+  );
 }
 
 const searchContainerStyle = css`
   padding: 40px 0px 30px;
-`
+`;
 
 const latestPostStyle = css`
   margin: 23px 0px 5px;
   word-wrap: break-word;
-`
+`;
 
 const profileContainerStyle = css`
   display: flex;
   flex-direction: row;
-`
+  align-items: flex-start;
+`;
 
 const profileImageStyle = css`
+  border-radius: 21px;
   width: 42px;
   height: 42px;
-  border-radius: 34px;
-`
+`;
 
 const placeholderStyle = css`
   ${profileImageStyle};
-`
+`;
 
 const listItemContainerStyle = css`
   display: flex;
   flex-direction: column;
-`
+`;
 
 const listItemStyle = css`
   background-color: white;
   margin-top: 13px;
   border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, .15);
+  border: 1px solid rgba(0, 0, 0, 0.15);
   padding: 21px;
-`
+`;
 
 const profileInfoStyle = css`
   margin-left: 10px;
-`
+`;
 
 const nameStyle = css`
   margin: 0 0px 5px;
-`
+`;
 
 const handleStyle = css`
   margin: 0px 0px 5px;
   color: #b900c9;
-`
+`;
 
-const itemTypeStyle = css`
-  margin: 0;
-  font-weight: 500;
-  font-size: 14px;
-  color: rgba(0, 0, 0, .45);
-  margin-bottom: 16px;
-`
+const inputStyle = css`
+  outline: none;
+  border: none;
+  padding: 15px 20px;
+  font-size: 16px;
+  border-radius: 25px;
+  border: 2px solid rgba(0, 0, 0, 0.04);
+  transition: all 0.4s;
+  width: 300px;
+  background-color: #fafafa;
+  &:focus {
+    background-color: white;
+    border: 2px solid rgba(0, 0, 0, 0.1);
+  }
+`;
